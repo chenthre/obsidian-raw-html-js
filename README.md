@@ -1,5 +1,8 @@
 # Raw HTML+JS for Obsidian
 
+> [!CAUTION]
+> **This repository was generated entirely by an AI coding agent** — code, docs, and the prompt below — as a demonstration of agent-driven development. It was tested working in the author's vault at the time of writing, but is provided as-is, with no guarantee of correctness or maintenance. Review `main.js` (it's 34 lines) before enabling, and understand the security trade-off it deliberately makes.
+
 A 27-line Obsidian plugin that makes ` ```live-html ` code fences run like real browser HTML — **`<script>` tags execute, vanilla DOM code just works**. Build sliders, calculators, live-weather cards, maps, mini-dashboards: all inside a plain markdown note.
 
 ```live-html
@@ -50,9 +53,12 @@ Then restart Obsidian and enable the plugin as above.
 
 In the [BRAT](https://github.com/TfTHacker/obsidian42-brat) plugin: *Add Beta plugin* → enter this repo's URL.
 
-**Option D — Ask your AI agent to build it**
+**Option D — ⚠️ Ask your AI agent to build it**
 
-The plugin is small enough that any competent coding agent (pi, Claude Code, Codex, Cursor, …) can build it in your vault. Paste this, filling in your vault path:
+The plugin is small enough that any competent coding agent (pi, Claude Code, Codex, Cursor, …) can build it in your vault. Paste this, filling in your vault path.
+
+> [!WARNING]
+> ⚠️ Generative recursion: this prompt was **also written by an AI**. Neither layer — the code's origin nor the prompt's — can fully assure the final effect. Treat it as a strong starting point, then review what your agent produces against the acceptance tests below before trusting it.
 
 ````text
 I want a new capability in my Obsidian vault, and I want you to build the
