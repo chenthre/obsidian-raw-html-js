@@ -50,6 +50,63 @@ Then restart Obsidian and enable the plugin as above.
 
 In the [BRAT](https://github.com/TfTHacker/obsidian42-brat) plugin: *Add Beta plugin* → enter this repo's URL.
 
+**Option D — Ask your AI agent to build it**
+
+The plugin is 27 lines of logic — any coding agent (pi, Claude Code, Codex, Cursor, …) can recreate it from scratch in your vault. The hard part isn't the code, it's the four platform landmines, so hand your agent this prompt verbatim (fill in your vault path):
+
+````text
+Task: create a tiny Obsidian plugin called "Raw HTML+JS" in my vault.
+
+Vault path: <ABSOLUTE PATH to the folder containing .obsidian>
+
+Create exactly two files:
+
+1. <vault>/.obsidian/plugins/raw-html-js/manifest.json with fields:
+   "id": "raw-html-js", "name": "Raw HTML+JS", "version": "1.0.0",
+   "minAppVersion": "1.0.0", "isDesktopOnly": false, plus "description" and "author".
+
+2. <vault>/.obsidian/plugins/raw-html-js/main.js — a CommonJS module exporting
+   a class extending Plugin from require("obsidian"). In onload(), call
+   this.registerMarkdownCodeBlockProcessor("live-html", handler) where handler(source, el):
+   - create a div with className "raw-html-js" and set innerHTML = source
+   - for each <script> in it: create a NEW script via document.createElement,
+     copy src if present, set textContent to the original code wrapped in a
+     bare block: "{\n" + code + "\n}", then old.replaceWith(new)
+   - append the holder to el
+
+Requirements — each one prevents a real failure; do not skip or improve them:
+
+1. The tag MUST be "live-html", never "html". Plain ```html fences must keep
+   Obsidian's stock display-only code block behavior.
+2. Scripts MUST be revived via createElement + replaceWith. Setting innerHTML
+   never executes <script> tags (they parse as inert elements).
+3. Script code MUST be wrapped in a bare { ... } block. Obsidian renders one
+   note in two DOM copies at once (live preview + reading view); unwrapped
+   top-level const/let collide across copies and widgets die with
+   "Identifier has already been declared".
+4. Put a comment in main.js telling users to scope DOM queries in their
+   widgets with: document.currentScript.closest(".raw-html-js") — element IDs
+   exist twice across the two renders.
+5. No build step, no dependencies, no styles.css, no settings tab. Minimal.
+
+Then enable it: if Obsidian is closed, it discovers the plugin on next launch
+(user enables it under Settings → Community plugins, turning off Restricted
+mode first). If Obsidian is running and the `obsidian` CLI is available, run:
+  obsidian eval code="app.plugins.loadManifests().then(() => app.plugins.enablePluginAndSave('raw-html-js')).then(() => 'enabled')"
+(otherwise instruct me to restart Obsidian and enable it manually).
+
+Verify by writing a smoke-test note into the vault containing one live-html
+fence with two range inputs and a script that shows their sum, using the
+scoping convention from requirement 4. Tell me what I should see: two working
+sliders, not a code block. Finally, warn me clearly that enabling this plugin
+means any live-html fence in my vault executes arbitrary JavaScript on render.
+````
+
+Why the prompt is this opinionated: each numbered requirement is a bug we hit
+for real (the silent `innerHTML` no-op, the global-scope collision across
+dual renders, display fences being hijacked). An agent told only "make
+Obsidian run JS" will miss all of them.
+
 ## Usage
 
 Any ` ```live-html ` fence runs as if it were a standalone HTML page:
