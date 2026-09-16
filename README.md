@@ -52,60 +52,61 @@ In the [BRAT](https://github.com/TfTHacker/obsidian42-brat) plugin: *Add Beta pl
 
 **Option D — Ask your AI agent to build it**
 
-The plugin is 27 lines of logic — any coding agent (pi, Claude Code, Codex, Cursor, …) can recreate it from scratch in your vault. The hard part isn't the code, it's the four platform landmines, so hand your agent this prompt verbatim (fill in your vault path):
+The plugin is small enough that any competent coding agent (pi, Claude Code, Codex, Cursor, …) can build it in your vault. Paste this, filling in your vault path:
 
 ````text
-Task: create a tiny Obsidian plugin called "Raw HTML+JS" in my vault.
+I want a new capability in my Obsidian vault, and I want you to build the
+plugin that provides it.
 
-Vault path: <ABSOLUTE PATH to the folder containing .obsidian>
+The intention: my notes should be able to contain small living web pages. In
+any note, I write a fenced block tagged `live-html` holding ordinary HTML —
+markup, styles, scripts, event handlers. When the note opens, that block
+comes alive: my markup renders, my script runs, my handlers fire, and it
+stays interactive as I keep working. The model is a Jupyter cell or an
+embedded browser page: if I can write it in an HTML file, it should work in
+the fence. Vanilla web code only — no framework, and no custom API for me to
+learn beyond what a web developer already knows.
 
-Create exactly two files:
+Build, install, and enable this plugin for my vault at <ABSOLUTE PATH to the
+folder containing .obsidian>. Standard Obsidian plugin layout (manifest +
+main.js), CommonJS, no build step, no dependencies — I should be able to
+read the entire thing over one coffee.
 
-1. <vault>/.obsidian/plugins/raw-html-js/manifest.json with fields:
-   "id": "raw-html-js", "name": "Raw HTML+JS", "version": "1.0.0",
-   "minAppVersion": "1.0.0", "isDesktopOnly": false, plus "description" and "author".
+Judge yourself by these acceptance tests, not by the code looking right:
 
-2. <vault>/.obsidian/plugins/raw-html-js/main.js — a CommonJS module exporting
-   a class extending Plugin from require("obsidian"). In onload(), call
-   this.registerMarkdownCodeBlockProcessor("live-html", handler) where handler(source, el):
-   - create a div with className "raw-html-js" and set innerHTML = source
-   - for each <script> in it: create a NEW script via document.createElement,
-     copy src if present, set textContent to the original code wrapped in a
-     bare block: "{\n" + code + "\n}", then old.replaceWith(new)
-   - append the holder to el
+1. Smoke test: write a note with a live-html block containing two range
+   inputs and a live "a + b" sum. Opening the note shows two working sliders
+   — dragging either instantly updates the sum — not a code block.
+2. It works in both of Obsidian's render modes at once: the note is rendered
+   for live preview and for reading view simultaneously, and the widget must
+   be alive in both, with no console errors. (Failures here are sneaky and
+   silent: a widget that works in one mode but is dead in the other, or an
+   "Identifier has already been declared" console error.)
+3. Two or more live-html blocks in the same note coexist without cross-talk.
+4. A plain ```html fence in any note keeps Obsidian's stock behavior —
+   display-only syntax-highlighted source. This plugin must not touch it.
+5. The plugin enables cleanly: discovered on restart or via CLI, survives
+   plugin reloads, and uninstalling its folder restores stock behavior.
+6. If my widget scripts need a convention to address elements within their
+   own block, that convention must be tiny, documented in a comment inside
+   main.js, and used in your smoke test.
 
-Requirements — each one prevents a real failure; do not skip or improve them:
+Verify for real before declaring victory: if the `obsidian` CLI is available
+on this machine, open the smoke-test note, force reading view, and confirm
+the sliders exist and respond to synthetic input events — then show me the
+evidence. Otherwise give me exact manual steps and what to look for.
 
-1. The tag MUST be "live-html", never "html". Plain ```html fences must keep
-   Obsidian's stock display-only code block behavior.
-2. Scripts MUST be revived via createElement + replaceWith. Setting innerHTML
-   never executes <script> tags (they parse as inert elements).
-3. Script code MUST be wrapped in a bare { ... } block. Obsidian renders one
-   note in two DOM copies at once (live preview + reading view); unwrapped
-   top-level const/let collide across copies and widgets die with
-   "Identifier has already been declared".
-4. Put a comment in main.js telling users to scope DOM queries in their
-   widgets with: document.currentScript.closest(".raw-html-js") — element IDs
-   exist twice across the two renders.
-5. No build step, no dependencies, no styles.css, no settings tab. Minimal.
-
-Then enable it: if Obsidian is closed, it discovers the plugin on next launch
-(user enables it under Settings → Community plugins, turning off Restricted
-mode first). If Obsidian is running and the `obsidian` CLI is available, run:
-  obsidian eval code="app.plugins.loadManifests().then(() => app.plugins.enablePluginAndSave('raw-html-js')).then(() => 'enabled')"
-(otherwise instruct me to restart Obsidian and enable it manually).
-
-Verify by writing a smoke-test note into the vault containing one live-html
-fence with two range inputs and a script that shows their sum, using the
-scoping convention from requirement 4. Tell me what I should see: two working
-sliders, not a code block. Finally, warn me clearly that enabling this plugin
-means any live-html fence in my vault executes arbitrary JavaScript on render.
+One thing you must tell me when done, in plain words: enabling this plugin
+means any live-html fence in my vault executes arbitrary JavaScript on
+render. I accept that; say it anyway.
 ````
 
-Why the prompt is this opinionated: each numbered requirement is a bug we hit
-for real (the silent `innerHTML` no-op, the global-scope collision across
-dual renders, display fences being hijacked). An agent told only "make
-Obsidian run JS" will miss all of them.
+Deliberately, this prompt describes the **experience and its acceptance
+tests**, not the implementation. The interesting engineering — how scripts
+actually get executed, how coexisting renders stay isolated — is the agent's
+job to discover; the tests decide whether it got there. An agent that passes
+all six owns its design; an agent handed our constraints would just transcribe
+them.
 
 ## Usage
 
