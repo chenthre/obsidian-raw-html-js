@@ -1,0 +1,9 @@
+{
+  "id": "raw-html-js",
+  "name": "Raw HTML+JS",
+  "version": "1.1.0",
+  "minAppVersion": "1.0.0",
+  "description": "Run real HTML+JavaScript inside notes via ```live-html code fences — sliders, calculators, live API data, maps. Vanilla DOM, no framework.",
+  "author": "rl2lab",
+  "isDesktopOnly": false
+}
