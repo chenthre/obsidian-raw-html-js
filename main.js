@@ -142,6 +142,18 @@ function makeLivehtml(register) {
   return livehtml;
 }
 
+// Dispose every driver bound to the holder itself or any element inside
+// it. Idempotent (dispose() checks its own dead flag). Shared by the
+// re-render path and the render child's unload.
+function disposeDriversUnder(holder) {
+  const own = DRIVERS.get(holder);
+  if (own) own();
+  for (const mount of [...holder.querySelectorAll("*")]) {
+    const dispose = DRIVERS.get(mount);
+    if (dispose) dispose();
+  }
+}
+
 // A render child per live-html block: when Obsidian destroys the rendered
 // section (note closed, block re-rendered, view switched), every driver
 // mounted inside this holder is disposed deterministically.
@@ -150,14 +162,7 @@ class LiveHtmlChild extends MarkdownRenderChild {
     super(holder);
   }
   onunload() {
-    for (const mount of [...this.containerEl.querySelectorAll("*")]) {
-      const dispose = DRIVERS.get(mount);
-      if (dispose) dispose();
-    }
-    // The scene helpers bind to the holder's mounts; drive() may also have
-    // been called with the holder itself.
-    const own = DRIVERS.get(this.containerEl);
-    if (own) own();
+    disposeDriversUnder(this.containerEl);
   }
 }
 
@@ -172,9 +177,11 @@ module.exports = class RawHtmlJsPlugin extends Plugin {
       "live-html",
       (source, el, ctx) => {
         // A re-run on the same el (reading-view re-render, mode switch)
-        // replaces the previous holder and disposes its drivers first.
+        // replaces the previous holder, disposing its drivers BEFORE the
+        // DOM goes away — not relying on a later renderer callback.
         for (const child of [...el.children]) {
           if (child.classList && child.classList.contains("raw-html-js")) {
+            disposeDriversUnder(child);
             child.remove();
           }
         }

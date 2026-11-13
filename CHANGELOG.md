@@ -12,6 +12,8 @@
 
 ## 1.2.0
 
+(Revision 3, per third review: old drivers are disposed explicitly BEFORE a replaced holder is removed — a shared `disposeDriversUnder(holder)` helper used by both the re-render path and `LiveHtmlChild.onunload`; README documents the `window.livehtml` API, lifecycle behavior, the `0..0.999` progress contract, and the per-mount progress anchoring; line-count claims corrected. Temporary detach/remount validated in Obsidian: scroll far and back, reading↔live-preview round-trips, block re-render, repeated note open/close, two notes in separate panes — scenes resume, no duplicates, no dead scenes.)
+
 (Revision 2, per review: `drive()` returns a dispose handle; drivers are per-mount (WeakMap) so scenes in one block are independent; the processor replaces previous holders on re-run — no duplicate containers; resize recalculates progress; the 0..0.999 progress contract is documented; unload disposes all listeners/rAFs/timers.)
 
 - `window.livehtml` — a shared scroll-driver for scroll-linked (scrollytelling) content:
