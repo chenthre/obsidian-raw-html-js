@@ -1,9 +1,9 @@
 # Raw HTML+JS for Obsidian
 
 > [!CAUTION]
-> **This repository was generated entirely by an AI coding agent** — code, docs, and the prompt below — as a demonstration of agent-driven development. It was tested working in the author's vault at the time of writing, but is provided as-is, with no guarantee of correctness or maintenance. Review `main.js` (it's 34 lines) before enabling, and understand the security trade-off it deliberately makes.
+> **This repository was generated entirely by an AI coding agent** — code, docs, and the prompt below — as a demonstration of agent-driven development. It was tested working in the author's vault at the time of writing, but is provided as-is, with no guarantee of correctness or maintenance. Review `main.js` (a single file, readable over one coffee) before enabling, and understand the security trade-off it deliberately makes.
 
-A 27-line Obsidian plugin that makes ` ```live-html ` code fences run like real browser HTML — **`<script>` tags execute, vanilla DOM code just works**. Build sliders, calculators, live-weather cards, maps, mini-dashboards: all inside a plain markdown note.
+A single-file, zero-dependency Obsidian plugin that makes ` ```live-html ` code fences run like real browser HTML — **`<script>` tags execute, vanilla DOM code just works**. Build sliders, calculators, live-weather cards, maps, mini-dashboards: all inside a plain markdown note.
 
 ```live-html
 <div>
@@ -128,6 +128,25 @@ Any ` ```live-html ` fence runs as if it were a standalone HTML page:
   ```
 
 - Widgets are **ephemeral**: DOM state resets when the note reopens. Persist values via frontmatter (e.g. the [Meta Bind](https://github.com/mProjectsCode/obsidian-meta-bind-plugin) plugin) or read vault data at render time.
+
+### Scroll-linked scenes (`window.livehtml`)
+
+For scrollytelling content — scenes that develop as the reader scrolls — the plugin exposes a shared driver as `window.livehtml`, so a scene block needs no driver code of its own:
+
+```js
+const scene = {
+  render(svg) { /* build the scene once (SVG elements, labels) */ },
+  scrollUpdate(svg, progress) { /* flip opacities / phases by threshold */ },
+};
+livehtml.svgScene(mount, scene); // render + wire the scroll driving
+```
+
+- `livehtml.drive(el, update)` — calls `update(progress)` with `progress` from `0` up to `0.999` (the ceiling avoids re-triggering terminal-phase logic keyed on `< 1`) as the reader scrolls, **bidirectionally** — scrolling up rewinds. A scene starts developing once its anchor passes mid-viewport and completes as it reaches the top. Returns a `dispose()` handle.
+- `livehtml.svgScene(mount, scene, addArrowDef?)` / `livehtml.htmlScene(mount, scene)` — mount a scene object following the `render` / `scrollUpdate(container, progress)` contract (`htmlScene` also accepts `renderHtml` / `scrollUpdateHtml`). Return `{ dispose }`. Mounts are idempotent: a re-render replaces, never appends. `svgScene` gives the mount a 500×500 viewBox SVG.
+- Progress is **anchored to the individual mount element** you pass in, not the block root.
+- Lifecycle is deterministic: closing the note, re-rendering the block, or plugin unload disposes the block's drivers (a `MarkdownRenderChild` is attached per rendered block; disposal also happens explicitly before a holder is replaced on re-render). Rebinding a mount replaces its own driver only — several scenes in one block are independent. Obsidian's chunked-render detach is a *skip*, not a dispose: a scene reattached without a fresh processor run resumes driving.
+
+Every scroll event costs one rAF-coalesced bounding-rect read per driver, with early exit while a block is temporarily disconnected — scrolling a *different* pane is a cheap no-op for detached scenes.
 
 ### Ideas
 
