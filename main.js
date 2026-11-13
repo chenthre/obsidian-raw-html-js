@@ -62,6 +62,7 @@ function makeLivehtml(register) {
     DRIVERS.set(el, dispose);
     const unregister = register(dispose); // plugin unload is the fallback
 
+    let lastP = -1;
     const compute = () => {
       if (dead) return;
       // Resolve the scroller per event: at script-run time the block may
@@ -78,7 +79,13 @@ function makeLivehtml(register) {
       // terminal-phase logic keyed on "< 1" never triggers on a live driver.
       const span = vh * 0.55;
       if (span <= 0) return;
-      update(Math.max(0, Math.min(0.999, (span - top) / span)));
+      const p = Math.max(0, Math.min(0.999, (span - top) / span));
+      // Delta guard: scrolling a different pane repositions nothing here —
+      // an unchanged progress must not re-run scene updates.
+      if (p !== lastP) {
+        lastP = p;
+        update(p);
+      }
     };
     const run = () => {
       if (dead) return;
