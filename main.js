@@ -7,15 +7,21 @@
  * Plain ```html fences are NOT touched — they stay normal display-only code blocks.
  *
  * The `livehtml` helper (window.livehtml) drives scroll-linked content:
- *   livehtml.drive(el, update) — calls update(progress 0..1) as the reader
- *                                scrolls (bidirectional)
+ *   livehtml.drive(el, update) — calls update(progress 0..0.999) as the
+ *                                reader scrolls (bidirectional); returns a
+ *                                dispose() handle
  *   livehtml.svgScene(mount, scene, addArrowDef?)
- *   livehtml.htmlScene(mount, scene)
+ *   livehtml.htmlScene(mount, scene)      — return { dispose }
  * The scene helpers mount objects with render(container) and
- * scrollUpdate(container, progress) — the common scrollytelling contract —
- * and wire them to the scroll driver. Mounts are idempotent: Obsidian
- * re-runs the processor on the same holder when the reading view re-renders
- * (mode switches, backlinks refresh), so a re-run replaces, never appends.
+ * scrollUpdate(container, progress) — the common scrollytelling contract
+ * (htmlScene accepts renderHtml/scrollUpdateHtml as aliases).
+ *
+ * Lifecycle: drivers live in a WeakMap keyed by their mount element —
+ * independent scenes in one block get independent drivers; rebinding a
+ * mount replaces its own driver only. All live listeners/timers are
+ * registered with the plugin and disposed on unload. Obsidian re-runs the
+ * block processor on the same el when the reading view re-renders — the
+ * processor replaces the previous holder instead of appending a new one.
  *
  * Inside a block, scope your queries to avoid ID clashes between renders:
  *   const root = document.currentScript.closest('.raw-html-js');
@@ -25,17 +31,37 @@
  */
 const { Plugin } = require("obsidian");
 
-function makeLivehtml() {
+const DRIVERS = new WeakMap(); // mount element -> dispose()
+
+function makeLivehtml(register) {
   const livehtml = {};
 
   livehtml.drive = (el, update) => {
     const root = (el && el.closest(".raw-html-js")) || el;
-    if (!root || typeof update !== "function") return;
-    // Idempotent bind: a re-run replaces the previous driver instead of
-    // stacking a second one (duplicate updates on every scroll).
-    if (root.__livehtmlDrive) root.__livehtmlDrive();
+    if (!root || typeof update !== "function") return () => {};
+    // Rebinding a mount replaces its previous driver (no stacked listeners);
+    // other scenes in the same block keep theirs.
+    const prev = DRIVERS.get(el);
+    if (prev) prev();
+
     let raf = 0;
+    let settleTimer = null;
+    let dead = false;
+
+    const dispose = () => {
+      if (dead) return;
+      dead = true;
+      DRIVERS.delete(el);
+      window.removeEventListener("scroll", run, true);
+      window.removeEventListener("resize", run);
+      if (settleTimer) clearTimeout(settleTimer);
+      cancelAnimationFrame(raf);
+    };
+    DRIVERS.set(el, dispose);
+    register(dispose); // plugin unload disposes every live driver
+
     const compute = () => {
+      if (dead) return;
       // Resolve the scroller per event: at script-run time the block may
       // not be attached to its final container yet.
       const sc =
@@ -46,51 +72,43 @@ function makeLivehtml() {
       const base = sc === window ? 0 : sc.getBoundingClientRect().top;
       const top = root.getBoundingClientRect().top - base;
       // A scene starts developing once its anchor passes mid-viewport and
-      // completes as it reaches the top; the 0.999 ceiling avoids
-      // re-triggering terminal-phase logic.
+      // completes as it reaches the top; 0.999 (not 1) is the ceiling so
+      // terminal-phase logic keyed on "< 1" never triggers on a live driver.
       const span = vh * 0.55;
       if (span <= 0) return;
       update(Math.max(0, Math.min(0.999, (span - top) / span)));
     };
-    let gone = 0;
     const run = () => {
-      // Obsidian's chunked rendering detaches blocks temporarily — skip
-      // while disconnected. Only a long detachment (no remount, no settle)
-      // means the block is truly gone: release the listener then.
-      if (!root.isConnected) {
-        if (!gone) gone = Date.now();
-        if (Date.now() - gone > 30000) {
-          window.removeEventListener("scroll", run, true);
-        }
-        return;
-      }
-      gone = 0;
+      if (dead) return;
+      // Chunked rendering detaches blocks temporarily — skip while
+      // disconnected; the driver stays bound and resumes on remount.
+      if (!root.isConnected) return;
       cancelAnimationFrame(raf);
       raf = requestAnimationFrame(compute);
     };
     // Scroll does not bubble, but the capture phase passes through
-    // window — one listener catches every scroller in the app.
+    // window — one listener catches every scroller in the app. (Scrollers
+    // are cheap to filter: one bounding-rect read per rAF.)
     window.addEventListener("scroll", run, { passive: true, capture: true });
+    window.addEventListener("resize", run, { passive: true });
     // Settle polling: a freshly (re)mounted layout takes frames to
     // stabilize, and scroll events fired mid-remount never arrive.
     let polls = 12;
     const settle = () => {
-      if (polls-- <= 0) return;
+      if (dead || polls-- <= 0) return;
       run();
-      setTimeout(settle, 160);
+      settleTimer = setTimeout(settle, 160);
     };
-    requestAnimationFrame(() => requestAnimationFrame(settle));
-    // Cleanup handle for the idempotent-bind replacement above.
-    root.__livehtmlDrive = () => {
-      window.removeEventListener("scroll", run, true);
-      cancelAnimationFrame(raf);
-      root.__livehtmlDrive = null;
-    };
+    requestAnimationFrame(() => requestAnimationFrame(() => settle()));
+
+    return dispose;
   };
 
   livehtml.svgScene = (mountEl, scene, addArrowDef) => {
-    // Idempotent mount: a re-run of the block's processor must not append
-    // a second scene — clear the mount first.
+    const render = scene.render || scene.renderHtml;
+    if (typeof render !== "function") return { dispose: () => {} };
+    // Idempotent mount: a re-run replaces the previous scene (and its
+    // driver) rather than appending a second one.
     mountEl.replaceChildren();
     const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     svg.setAttribute("viewBox", "0 0 500 500");
@@ -98,19 +116,26 @@ function makeLivehtml() {
     svg.style.width = "100%";
     mountEl.appendChild(svg);
     if (addArrowDef) addArrowDef(svg);
-    scene.render(svg);
-    livehtml.drive(mountEl, (p) => {
-      if (scene.scrollUpdate) scene.scrollUpdate(svg, p);
+    render.call(scene, svg);
+    const update =
+      scene.scrollUpdate || scene.scrollUpdateHtml;
+    const dispose = livehtml.drive(mountEl, (p) => {
+      if (typeof update === "function") update.call(scene, svg, p);
     });
+    return { dispose };
   };
 
   livehtml.htmlScene = (mountEl, scene) => {
+    const render = scene.renderHtml || scene.render;
+    if (typeof render !== "function") return { dispose: () => {} };
     // Idempotent mount — see svgScene.
     mountEl.replaceChildren();
-    scene.renderHtml(mountEl);
-    livehtml.drive(mountEl, (p) => {
-      if (scene.scrollUpdateHtml) scene.scrollUpdateHtml(mountEl, p);
+    render.call(scene, mountEl);
+    const update = scene.scrollUpdateHtml || scene.scrollUpdate;
+    const dispose = livehtml.drive(mountEl, (p) => {
+      if (typeof update === "function") update.call(scene, mountEl, p);
     });
+    return { dispose };
   };
 
   return livehtml;
@@ -118,8 +143,18 @@ function makeLivehtml() {
 
 module.exports = class RawHtmlJsPlugin extends Plugin {
   onload() {
-    window.livehtml = makeLivehtml();
+    this.disposers = new Set();
+    window.livehtml = makeLivehtml((dispose) => {
+      this.disposers.add(dispose);
+    });
     this.registerMarkdownCodeBlockProcessor("live-html", (source, el) => {
+      // A re-run on the same el (reading-view re-render, mode switch)
+      // replaces the previous holder instead of appending a new one.
+      for (const child of [...el.children]) {
+        if (child.classList && child.classList.contains("raw-html-js")) {
+          child.remove();
+        }
+      }
       const holder = document.createElement("div");
       holder.className = "raw-html-js";
       holder.innerHTML = source;
@@ -148,6 +183,10 @@ module.exports = class RawHtmlJsPlugin extends Plugin {
   }
 
   onunload() {
+    for (const dispose of this.disposers) {
+      try { dispose(); } catch (e) { /* a scene's DOM may already be gone */ }
+    }
+    this.disposers.clear();
     delete window.livehtml;
   }
 };
