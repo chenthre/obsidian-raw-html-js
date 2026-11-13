@@ -16,12 +16,13 @@
  * scrollUpdate(container, progress) — the common scrollytelling contract
  * (htmlScene accepts renderHtml/scrollUpdateHtml as aliases).
  *
- * Lifecycle: drivers live in a WeakMap keyed by their mount element —
- * independent scenes in one block get independent drivers; rebinding a
- * mount replaces its own driver only. All live listeners/timers are
- * registered with the plugin and disposed on unload. Obsidian re-runs the
- * block processor on the same el when the reading view re-renders — the
- * processor replaces the previous holder instead of appending a new one.
+ * Lifecycle: a render child is attached to every rendered block (ctx.addChild),
+ * so closing a note or re-rendering a block deterministically disposes the
+ * block's drivers — no reliance on a later scroll event. Drivers are also
+ * keyed per mount element in a WeakMap: scenes in one block are independent,
+ * rebinding a mount replaces only its own driver. Plugin unload is the final
+ * fallback. Obsidian's temporary detach/remount (chunked rendering) stays a
+ * skip, not a dispose.
  *
  * Inside a block, scope your queries to avoid ID clashes between renders:
  *   const root = document.currentScript.closest('.raw-html-js');
@@ -29,7 +30,7 @@
  * Security note: any ```live-html fence in this vault may now execute JS.
  * That is the point — remove this folder to undo.
  */
-const { Plugin } = require("obsidian");
+const { Plugin, MarkdownRenderChild } = require("obsidian");
 
 const DRIVERS = new WeakMap(); // mount element -> dispose()
 
@@ -51,14 +52,15 @@ function makeLivehtml(register) {
     const dispose = () => {
       if (dead) return;
       dead = true;
-      DRIVERS.delete(el);
+      if (DRIVERS.get(el) === dispose) DRIVERS.delete(el);
+      unregister(dispose); // the registry holds only active drivers
       window.removeEventListener("scroll", run, true);
       window.removeEventListener("resize", run);
       if (settleTimer) clearTimeout(settleTimer);
       cancelAnimationFrame(raf);
     };
     DRIVERS.set(el, dispose);
-    register(dispose); // plugin unload disposes every live driver
+    const unregister = register(dispose); // plugin unload is the fallback
 
     const compute = () => {
       if (dead) return;
@@ -117,8 +119,7 @@ function makeLivehtml(register) {
     mountEl.appendChild(svg);
     if (addArrowDef) addArrowDef(svg);
     render.call(scene, svg);
-    const update =
-      scene.scrollUpdate || scene.scrollUpdateHtml;
+    const update = scene.scrollUpdate || scene.scrollUpdateHtml;
     const dispose = livehtml.drive(mountEl, (p) => {
       if (typeof update === "function") update.call(scene, svg, p);
     });
@@ -141,50 +142,80 @@ function makeLivehtml(register) {
   return livehtml;
 }
 
+// A render child per live-html block: when Obsidian destroys the rendered
+// section (note closed, block re-rendered, view switched), every driver
+// mounted inside this holder is disposed deterministically.
+class LiveHtmlChild extends MarkdownRenderChild {
+  constructor(holder) {
+    super(holder);
+  }
+  onunload() {
+    for (const mount of [...this.containerEl.querySelectorAll("*")]) {
+      const dispose = DRIVERS.get(mount);
+      if (dispose) dispose();
+    }
+    // The scene helpers bind to the holder's mounts; drive() may also have
+    // been called with the holder itself.
+    const own = DRIVERS.get(this.containerEl);
+    if (own) own();
+  }
+}
+
 module.exports = class RawHtmlJsPlugin extends Plugin {
   onload() {
-    this.disposers = new Set();
+    this.disposers = new Set(); // active drivers only — dispose() unregisters
     window.livehtml = makeLivehtml((dispose) => {
       this.disposers.add(dispose);
+      return () => this.disposers.delete(dispose);
     });
-    this.registerMarkdownCodeBlockProcessor("live-html", (source, el) => {
-      // A re-run on the same el (reading-view re-render, mode switch)
-      // replaces the previous holder instead of appending a new one.
-      for (const child of [...el.children]) {
-        if (child.classList && child.classList.contains("raw-html-js")) {
-          child.remove();
+    this.registerMarkdownCodeBlockProcessor(
+      "live-html",
+      (source, el, ctx) => {
+        // A re-run on the same el (reading-view re-render, mode switch)
+        // replaces the previous holder and disposes its drivers first.
+        for (const child of [...el.children]) {
+          if (child.classList && child.classList.contains("raw-html-js")) {
+            child.remove();
+          }
+        }
+        const holder = document.createElement("div");
+        holder.className = "raw-html-js";
+        holder.innerHTML = source;
+        holder.querySelectorAll("script").forEach((old) => {
+          const type = old.getAttribute("type") || "";
+          const isModule = type === "module";
+          const isExecutable = !type || isModule || /javascript/i.test(type);
+          const s = document.createElement("script");
+          if (old.src) s.src = old.src;
+          if (type) s.setAttribute("type", type);
+          if (!isExecutable) {
+            // Data blocks (application/json, importmap, …) are inert; keep
+            // them verbatim — wrapping would corrupt their content.
+            s.textContent = old.textContent;
+          } else if (isModule) {
+            s.textContent = old.textContent;
+          } else {
+            // Wrap in a bare block so const/let are block-scoped — otherwise
+            // multiple renders of the same note collide in global scope.
+            s.textContent = "{\n" + old.textContent + "\n}";
+          }
+          old.replaceWith(s);
+        });
+        el.appendChild(holder);
+        if (ctx && typeof ctx.addChild === "function") {
+          ctx.addChild(new LiveHtmlChild(holder));
         }
       }
-      const holder = document.createElement("div");
-      holder.className = "raw-html-js";
-      holder.innerHTML = source;
-      holder.querySelectorAll("script").forEach((old) => {
-        const type = old.getAttribute("type") || "";
-        const isModule = type === "module";
-        const isExecutable = !type || isModule || /javascript/i.test(type);
-        const s = document.createElement("script");
-        if (old.src) s.src = old.src;
-        if (type) s.setAttribute("type", type);
-        if (!isExecutable) {
-          // Data blocks (application/json, importmap, …) are inert; keep
-          // them verbatim — wrapping would corrupt their content.
-          s.textContent = old.textContent;
-        } else if (isModule) {
-          s.textContent = old.textContent;
-        } else {
-          // Wrap in a bare block so const/let are block-scoped — otherwise
-          // multiple renders of the same note collide in global scope.
-          s.textContent = "{\n" + old.textContent + "\n}";
-        }
-        old.replaceWith(s);
-      });
-      el.appendChild(holder);
-    });
+    );
   }
 
   onunload() {
-    for (const dispose of this.disposers) {
-      try { dispose(); } catch (e) { /* a scene's DOM may already be gone */ }
+    for (const dispose of [...this.disposers]) {
+      try {
+        dispose();
+      } catch (e) {
+        /* a scene's DOM may already be gone */
+      }
     }
     this.disposers.clear();
     delete window.livehtml;
